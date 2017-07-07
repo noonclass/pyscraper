@@ -2,11 +2,13 @@
 
 import os
 import re
-import time
 import json
+import time
+import redis
 import logging
 import requests
 from scrapy import Spider, Request
+from ScrapySpider.utils import get_extracted
 from ScrapySpider.items import InstagramUserItem, InstagramPostItem
 
 ## sql写文件
@@ -15,6 +17,9 @@ logging.basicConfig(
     format='%(message)s',
     level=logging.INFO
 )
+
+## 缓存连接
+REDIS = redis.Redis(host='127.0.0.1', port=6379, db=0)
 
 def get_mysql4user(user):
     sql = u"INSERT INTO `wp_users` (`ID`, `user_login`, `user_pass`, `user_nicename`, `user_email`, `user_registered`, `user_activation_key`, `user_status`, `display_name`) VALUES ({}, '{}', '$P$Bv4tMmzqpt9nBWKAdo7FUMUajheklN0', '{}', '{}@hotlinks.org', '1999-09-09 09:09:09', '', 0, '{}');".format(user['id'], user['username'], user['username'], user['username'],  user['full_name'])
@@ -39,29 +44,27 @@ def get_mysql4post(post, user):
     sql = ur"""INSERT INTO `wp_posts` (`ID`, `post_author`, `post_date`, `post_date_gmt`, `post_content`, `post_title`, `post_excerpt`, `post_status`, `comment_status`, `ping_status`, `post_password`, `post_name`, `to_ping`, `pinged`, `post_modified`, `post_modified_gmt`, `post_content_filtered`, `post_parent`, `guid`, `menu_order`, `post_type`, `post_mime_type`, `comment_count`) VALUES ({}, {}, '{}', '{}', '<a href="http://m.hotlinks.org/{}/{}" data-rel="lightbox[folio]"><img class="scale-with-grid alignnone size-full" src="http://m.hotlinks.org/{}/{}" alt=""/></a>', '{}', '{}', 'publish', 'open', 'open', '', '{}', '', '', '{}', '{}', '', 0, 'http://hotlinks.org/?p={}', 0, '{}', '', {});""".format(post['id'], user['id'], dt, dt, user['id'], post['display_res'], user['id'], post['display_res'], post['caption'], json.dumps(dict(post.items())).replace("\\'", "\'"), post['shortcode'], dt, dt, post['id'], 'video' if post['is_video'] else 'post', post['comments'])
     logging.info(sql)
 
-## utility
-def get_extracted(value, index=0):
-    try:
-        return value[index]
-    except:
-        return ''
-
 class InstagramSpider(Spider):
     name = 'instagram'
 
     def start_requests(self):
+        #追写评论，对上次爬取过的最新12篇文章再次获取评论信息
+        self.rescrapys = 12
+        logging.info('>>>>>>>>>>>>>>>>>>>>>>>>')
+        
         urls = [
             'https://www.instagram.com/github/',
+            #'https://www.instagram.com/moeka_nozaki/',
         ]
         for url in urls:
             yield Request(url=url, callback=self.parse)
     
     def parse(self, response):
         """首页处理：获取用户信息和当前显示的文章信息
-        """
+        """        
         item_user = InstagramUserItem() #用户信息
         
-        #获取配置，用来构造自动加载更多内容的请求时，查询ID是必带参数
+        #获取动态配置，用来构造自动加载更多内容的请求时，查询ID是必带参数
         url = 'https://www.instagram.com' + ''.join(response.xpath('//script[contains(@src, "Commons.js")]/@src').extract())
         javascript = requests.get(url)
         javascript = javascript.text
@@ -80,7 +83,7 @@ class InstagramSpider(Spider):
         item_user['is_private'] = data['user']['is_private']
         item_user['is_verified'] = data['user']['is_verified']
         item_user['username'] = data['user']['username']
-        item_user['full_name'] = data['user']['full_name'].replace(r"'", r"\'")
+        item_user['full_name'] = data['user']['full_name'].replace(r"'", r"\'") if data['user']['full_name'] else ''
         item_user['avatar'] = data['user']['profile_pic_url']
         item_user['followed'] = data['user']['followed_by']['count']
         item_user['follows'] = data['user']['follows']['count']
@@ -108,9 +111,15 @@ class InstagramSpider(Spider):
             self.parse_video(item_post, item_user)
             
             self.log('process post %s' % item_post['display_url'])
-            get_mysql4post(item_post, item_user) #写数据库
+            if REDIS.hexists('instagram_posts', item_post['date']):
+                self.rescrapys -= 1 #已缓存，倒数12个退出爬取
+                if (self.rescrapys <= 0):
+                    return
+            else:
+                REDIS.hset('instagram_posts', item_post['date'], item_post['id']) #缓存
+                get_mysql4post(item_post, item_user) #写数据库
             
-            #触发 PIPE 下载
+            #触发 PIPE
             yield item_post
             
         #触发请求：自动加载更多内容
@@ -155,10 +164,16 @@ class InstagramSpider(Spider):
             self.parse_video(item_post, item_user)
             
             self.log('process post %s' % item_post['display_url'])
-            get_mysql4post(item_post, item_user) #写数据库
-            
-            #触发 PIPE 下载
-            yield item_post
+            if REDIS.hexists('instagram_posts', item_post['date']):
+                self.rescrapys -= 1
+                if (self.rescrapys <= 0):
+                    return
+            else:
+                REDIS.hset('instagram_posts', item_post['date'], item_post['id']) #缓存
+                get_mysql4post(item_post, item_user) #写数据库
+                
+                #触发 PIPE
+                yield item_post
             
         #自动加载更多内容
         page = data['user']['edge_owner_to_timeline_media']['page_info']
@@ -169,7 +184,7 @@ class InstagramSpider(Spider):
     def parse_video(self, post, user):
         """视频的处理：只保存链接，没有下载视频文件
         """
-        if(post['is_video']):
+        if post['is_video']:
             url = 'https://www.instagram.com/p/' + post['shortcode'] + '/?taken-by=' + user['username'] +'&__a=1'
             response = requests.get(url)
             json_data = json.loads(response.text)

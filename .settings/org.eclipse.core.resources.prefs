@@ -3,4 +3,5 @@ encoding//ScrapySpider/items.py=utf-8
 encoding//ScrapySpider/pipelines.py=utf-8
 encoding//ScrapySpider/settings.py=utf-8
 encoding//ScrapySpider/spiders/instagram.py=utf-8
+encoding//ScrapySpider/utils.py=utf-8
 encoding/main.py=utf-8

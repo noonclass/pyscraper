@@ -6,8 +6,9 @@
 # See: http://doc.scrapy.org/en/latest/topics/item-pipeline.html
 
 import os
-import time
 import json
+import time
+import redis
 import logging
 import requests
 from ScrapySpider.items import InstagramPostItem, InstagramCommentItem
@@ -19,8 +20,10 @@ logging.basicConfig(
     level=logging.INFO
 )
 
+## 缓存连接
+REDIS = redis.Redis(host='127.0.0.1', port=6379, db=0)
 ## 评论ID，不可重复。启动前必须配合数据库表当前值
-COMMENT_INDEX = 1
+COMMENT_INDEX = REDIS.get('instagram_comment_id') if REDIS.get('instagram_comment_id') else 1
 
 def get_mysql4comment(comment, post):
     global COMMENT_INDEX
@@ -29,16 +32,18 @@ def get_mysql4comment(comment, post):
     logging.info(sql)
     sql = u"INSERT INTO `wp_commentmeta` (`comment_id`, `meta_key`, `meta_value`) VALUES ({}, 'si_avatar', '{}');".format(COMMENT_INDEX, comment['avatar'])
     logging.info(sql)
+    #自动生成最大评论ID
     COMMENT_INDEX += 1
+    REDIS.set('instagram_comment_id', COMMENT_INDEX)
 
-BASE = r'D:/Meida/'
+BASE = r'D:/Media/'
 
 ## 下载图片并保存到本地
 class InstagramPipeline(object):
     def process_item(self, item, spider):
         if not isinstance(item, InstagramPostItem):
             return
-            
+        
         #下载图片地址
         url = item['display_url']
         
@@ -67,7 +72,9 @@ class InstagramPipeline(object):
             item_comment['date'] = node['node']['created_at']
             item_comment['text'] = node['node']['text'].replace(r"'", r"\'")
             item_comment['avatar'] = node['node']['owner']['profile_pic_url']
-
-            get_mysql4comment(item_comment, item) #写数据库
+            
+            if not REDIS.hexists(item['id'], item_comment['date']):
+                REDIS.hset(item['id'], item_comment['date'], '') #缓存
+                get_mysql4comment(item_comment, item) #写数据库
         
         return item
