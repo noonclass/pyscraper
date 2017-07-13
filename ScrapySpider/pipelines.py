@@ -10,7 +10,8 @@ import json
 import time
 import redis
 import logging
-import requests
+import datetime
+from ScrapySpider.utils import get_response
 from ScrapySpider.items import InstagramPostItem, InstagramCommentItem
 
 ## sql写文件
@@ -23,7 +24,7 @@ logging.basicConfig(
 ## 缓存连接
 REDIS = redis.Redis(host='127.0.0.1', port=6379, db=0)
 ## 评论ID，不可重复。启动前必须配合数据库表当前值
-COMMENT_INDEX = REDIS.get('instagram_comment_id') if REDIS.get('instagram_comment_id') else 1
+COMMENT_INDEX = int(REDIS.get('instagram_comment_id')) if REDIS.get('instagram_comment_id') else 1
 
 def get_mysql4comment(comment, post):
     global COMMENT_INDEX
@@ -53,15 +54,25 @@ class InstagramPipeline(object):
             os.makedirs(path)
         
         file = path + '/' + item['display_res']
-
-        image = requests.get(url)
-        f = open(file, 'wb')
-        f.write(image.content)
-        f.close()
+        
+        if not os.path.exists(file):
+            print "%s:pipeline request (%s)." % (datetime.datetime.today(), url)
+            image = get_response(url)
+            f = open(file, 'wb')
+            f.write(image.content)
+            f.close()
         
         #获取评论信息，为了简单只取一次，时间上由远及近，取300条评论(默认为30条)
         url = 'https://www.instagram.com/graphql/query/?query_id=' + str(item['query_id']) + '&variables={"shortcode":"' + item['shortcode'] +'","first":300}'
-        response = requests.get(url)
+        
+        #@缓存请求链接的过滤，以减轻压力和防止被屏蔽
+        if REDIS.hexists('instagram_urls', url) and (int(REDIS.hget('instagram_urls', url)) == item['comments']):
+            print "%s:pipeline exists (%s) (%s) (%s)." % (datetime.datetime.today(), REDIS.hexists('instagram_urls', url), int(REDIS.hget('instagram_urls', url)), item['comments'])
+            return item
+        
+        #reactor.callInThread(self.DO_SOME_SYNC_OPERATION, argv) #线程池
+        print "%s:pipeline request (%s)." % (datetime.datetime.today(), url)
+        response = get_response(url)
         json_data = json.loads(response.text)
         data  = json_data['data']
         nodes = data['shortcode_media']['edge_media_to_comment']['edges']
@@ -76,5 +87,8 @@ class InstagramPipeline(object):
             if not REDIS.hexists(item['id'], item_comment['date']):
                 REDIS.hset(item['id'], item_comment['date'], '') #缓存
                 get_mysql4comment(item_comment, item) #写数据库
+        
+        #@缓存请求链接
+        REDIS.hset('instagram_urls', url, item['comments'])
         
         return item

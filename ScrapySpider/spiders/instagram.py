@@ -5,10 +5,11 @@ import re
 import json
 import time
 import redis
+import urllib
 import logging
-import requests
+import datetime
 from scrapy import Spider, Request
-from ScrapySpider.utils import get_extracted
+from ScrapySpider.utils import get_extracted, get_response
 from ScrapySpider.items import InstagramUserItem, InstagramPostItem
 
 ## sql写文件
@@ -20,6 +21,9 @@ logging.basicConfig(
 
 ## 缓存连接
 REDIS = redis.Redis(host='127.0.0.1', port=6379, db=0)
+
+## 断点续传开关
+RESUME_BROKEN = False
 
 def get_mysql4user(user):
     sql = u"INSERT INTO `wp_users` (`ID`, `user_login`, `user_pass`, `user_nicename`, `user_email`, `user_registered`, `user_activation_key`, `user_status`, `display_name`) VALUES ({}, '{}', '$P$Bv4tMmzqpt9nBWKAdo7FUMUajheklN0', '{}', '{}@hotlinks.org', '1999-09-09 09:09:09', '', 0, '{}');".format(user['id'], user['username'], user['username'], user['username'],  user['full_name'])
@@ -50,23 +54,26 @@ class InstagramSpider(Spider):
     def start_requests(self):
         #追写评论，对上次爬取过的最新12篇文章再次获取评论信息
         self.rescrapys = 12
-        logging.info('>>>>>>>>>>>>>>>>>>>>>>>>')
+        logging.info('-- Generation Time: %s' % (datetime.datetime.today()))
         
         urls = [
-            'https://www.instagram.com/github/',
             #'https://www.instagram.com/moeka_nozaki/',
+            'https://www.instagram.com/cocoannne/',
         ]
         for url in urls:
+            print "%s:request (%s)." % (datetime.datetime.today(), url)
             yield Request(url=url, callback=self.parse)
     
     def parse(self, response):
         """首页处理：获取用户信息和当前显示的文章信息
-        """        
+        """
+        print "%s:parse (%s)." % (datetime.datetime.today(), response.url)
+         
         item_user = InstagramUserItem() #用户信息
         
         #获取动态配置，用来构造自动加载更多内容的请求时，查询ID是必带参数
         url = 'https://www.instagram.com' + ''.join(response.xpath('//script[contains(@src, "Commons.js")]/@src').extract())
-        javascript = requests.get(url)
+        javascript = get_response(url)
         javascript = javascript.text
         pattern = re.compile(r'PROFILE_POSTS_UPDATED(.*?)queryId:"(\d+)"', re.S)
         item_user['query_id'] = re.search(pattern, javascript).group(2) #文章查询ID
@@ -89,14 +96,17 @@ class InstagramSpider(Spider):
         item_user['follows'] = data['user']['follows']['count']
         item_user['posts'] = data['user']['media']['count']
         
-        self.log('start_user %s' % item_user["full_name"])
+        self.log('parse user %s' % item_user["full_name"])
         get_mysql4user(item_user) #写数据库
         
         for node in data['user']['media']['nodes']:
             item_post = InstagramPostItem() #文章信息
             item_post['id'] = node['id']
             item_post['uid'] = item_user['id']
-            item_post['caption'] = node['caption'].replace(r"'", r"\'") if node.has_key('caption') else ''
+            try:
+                item_post['caption'] = node['caption'].replace(r"'", r"\'") if node.has_key('caption') else ''
+            except Exception:
+                item_post['caption'] = ''
             item_post['date'] = node['date']
             item_post['likes'] = node['likes']['count']
             item_post['comments'] = node['comments']['count']
@@ -110,35 +120,61 @@ class InstagramSpider(Spider):
             item_post['is_video'] = node['is_video']
             self.parse_video(item_post, item_user)
             
-            self.log('process post %s' % item_post['display_url'])
+            self.log('parse post %s' % item_post['display_url'])
             if REDIS.hexists('instagram_posts', item_post['date']):
                 self.rescrapys -= 1 #已缓存，倒数12个退出爬取
                 if (self.rescrapys <= 0):
-                    return
+                    if RESUME_BROKEN:
+                        pass
+                    else:
+                        return
             else:
                 REDIS.hset('instagram_posts', item_post['date'], item_post['id']) #缓存
                 get_mysql4post(item_post, item_user) #写数据库
             
             #触发 PIPE
+            print "%s:item (%s)." % (datetime.datetime.today(), item_post['id'])
             yield item_post
-            
+        
         #触发请求：自动加载更多内容
         page = data['user']['media']['page_info']
-        if(page['has_next_page']):
-            self.log('get_next_page...')
+        if page['has_next_page']:
             url = 'https://www.instagram.com/graphql/query/?query_id=' + str(item_user['query_id']) + '&variables={"id":"' + item_user['id'] +'","first":12,"after":"'+ page['end_cursor'] +'"}'
+            ##
+            if RESUME_BROKEN:
+                url = 'https://www.instagram.com/graphql/query/?query_id=' + str(item_user['query_id']) + '&variables={"id":"' + item_user['id'] +'","first":12,"after":"AQD-Ly6yJ3f7mHx8zCHa3sqed7CYkHwM4yQKOalwHslL24EfHBPthJeSwMdFD1HQ2Sfme2VnrAjqxiYjevqHXcjSz7LWiHzKDpG2a-QOwt-9wQ"}'
+                REDIS.hdel('instagram_urls', urllib.quote(url, ":/?=&,"))
+            
+            print "%s:request (%s)." % (datetime.datetime.today(), url)
             yield Request(url=url, meta={'item':item_user}, callback=self.parse2)
+        
+        print "%s:parse end." % datetime.datetime.today()
     
     def parse2(self, response):
         """加载更多文章的处理：数据格式和parse稍有不同，区别对待
         """
+        print "%s:parse2 (%s)." % (datetime.datetime.today(), response.url)
+        
         item_user = response.meta['item']
         
         json_data = json.loads(response.body)
         data  = json_data['data']
         nodes = data['user']['edge_owner_to_timeline_media']['edges']
         
-        self.log('processing %s...' % item_user["full_name"])
+        #@缓存请求链接的过滤，以减轻压力和防止被屏蔽
+        if REDIS.hexists('instagram_urls', response.url):
+            #自动加载更多内容
+            page = data['user']['edge_owner_to_timeline_media']['page_info']
+            if page['has_next_page']:
+                url = 'https://www.instagram.com/graphql/query/?query_id=' + str(item_user['query_id']) + '&variables={"id":"' + item_user['id'] +'","first":12,"after":"'+ page['end_cursor'] +'"}'
+                print "%s:request (%s)." % (datetime.datetime.today(), url)
+                yield Request(url=url, meta={'item':item_user}, callback=self.parse2)
+            return
+        
+        #@缓存请求链接
+        REDIS.hset('instagram_urls', response.url, '')
+        
+        self.log('parse2 user %s...' % item_user["full_name"])
         
         for node in nodes:
             item_post = InstagramPostItem() #文章信息
@@ -148,9 +184,14 @@ class InstagramSpider(Spider):
                 item_post['caption'] = node['node']['edge_media_to_caption']['edges'][0]['node']['text']
             except KeyError:
                 item_post['caption'] = ''
+            except IndexError:
+                item_post['caption'] = ''
             item_post['caption'] = item_post['caption'].replace(r"'", r"\'")
             item_post['date'] = node['node']['taken_at_timestamp']
-            item_post['likes'] = node['node']['edge_liked_by']['count']
+            try:
+                item_post['likes'] = node['node']['edge_liked_by']['count']
+            except KeyError:
+                item_post['likes'] = node['node']['edge_media_preview_like']['count']
             item_post['comments'] = node['node']['edge_media_to_comment']['count']
             item_post['shortcode'] = node['node']['shortcode']
             item_post['query_id'] = item_user['query_id2']
@@ -163,7 +204,7 @@ class InstagramSpider(Spider):
             item_post['is_video'] = node['node']['is_video']
             self.parse_video(item_post, item_user)
             
-            self.log('process post %s' % item_post['display_url'])
+            self.log('parse post %s' % item_post['display_url'])
             if REDIS.hexists('instagram_posts', item_post['date']):
                 self.rescrapys -= 1
                 if (self.rescrapys <= 0):
@@ -172,21 +213,25 @@ class InstagramSpider(Spider):
                 REDIS.hset('instagram_posts', item_post['date'], item_post['id']) #缓存
                 get_mysql4post(item_post, item_user) #写数据库
                 
-                #触发 PIPE
-                yield item_post
-            
+            #触发 PIPE
+            print "%s:item (%s)." % (datetime.datetime.today(), item_post['id'])
+            yield item_post
+        
         #自动加载更多内容
         page = data['user']['edge_owner_to_timeline_media']['page_info']
-        if(page['has_next_page']):
+        if page['has_next_page']:
             url = 'https://www.instagram.com/graphql/query/?query_id=' + str(item_user['query_id']) + '&variables={"id":"' + item_user['id'] +'","first":12,"after":"'+ page['end_cursor'] +'"}'
+            print "%s:request (%s)." % (datetime.datetime.today(), url)
             yield Request(url=url, meta={'item':item_user}, callback=self.parse2)
+        
+        print "%s:parse2 end." % datetime.datetime.today()
     
     def parse_video(self, post, user):
         """视频的处理：只保存链接，没有下载视频文件
         """
         if post['is_video']:
             url = 'https://www.instagram.com/p/' + post['shortcode'] + '/?taken-by=' + user['username'] +'&__a=1'
-            response = requests.get(url)
+            response = get_response(url)
             json_data = json.loads(response.text)
             data  = json_data['graphql']
             post['video_url']  = data['shortcode_media']['video_url']

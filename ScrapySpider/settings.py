@@ -23,9 +23,11 @@ LOG_FILE = 'spider.log'
 #是否遵循机器人规则
 ROBOTSTXT_OBEY = False
 #默认是16，一次可以请求的最大次数
-CONCURRENT_REQUESTS=16
+CONCURRENT_REQUESTS = 16
 #下载延迟
-DOWNLOAD_DELAY=0.5
+DOWNLOAD_DELAY = 0.5
+#启用缓存
+HTTPCACHE_ENABLED = True
 #Cookies设置
 COOKIES_ENABLED = True
 #headers设置
