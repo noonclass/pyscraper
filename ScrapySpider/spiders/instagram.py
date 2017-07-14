@@ -23,7 +23,7 @@ logging.basicConfig(
 REDIS = redis.Redis(host='127.0.0.1', port=6379, db=0)
 
 ## 断点续传开关
-RESUME_BROKEN = False
+RESUME_BROKEN = True
 
 def get_mysql4user(user):
     sql = u"INSERT INTO `wp_users` (`ID`, `user_login`, `user_pass`, `user_nicename`, `user_email`, `user_registered`, `user_activation_key`, `user_status`, `display_name`) VALUES ({}, '{}', '$P$Bv4tMmzqpt9nBWKAdo7FUMUajheklN0', '{}', '{}@hotlinks.org', '1999-09-09 09:09:09', '', 0, '{}');".format(user['id'], user['username'], user['username'], user['username'],  user['full_name'])
@@ -142,7 +142,7 @@ class InstagramSpider(Spider):
             url = 'https://www.instagram.com/graphql/query/?query_id=' + str(item_user['query_id']) + '&variables={"id":"' + item_user['id'] +'","first":12,"after":"'+ page['end_cursor'] +'"}'
             ##
             if RESUME_BROKEN:
-                url = 'https://www.instagram.com/graphql/query/?query_id=' + str(item_user['query_id']) + '&variables={"id":"' + item_user['id'] +'","first":12,"after":"AQD-Ly6yJ3f7mHx8zCHa3sqed7CYkHwM4yQKOalwHslL24EfHBPthJeSwMdFD1HQ2Sfme2VnrAjqxiYjevqHXcjSz7LWiHzKDpG2a-QOwt-9wQ"}'
+                url = 'https://www.instagram.com/graphql/query/?query_id=' + str(item_user['query_id']) + '&variables={"id":"' + item_user['id'] +'","first":12,"after":"AQCOz2vygr7ZJMTwbPNpDpwJl_4i1beCnlowVmwnvwMpNNY-xlU7-DVw1LLqhXWtsBI2u2O5Ys8GfmO_5SN2AS3g9ZiROGXk6vwXFwOQZhz98Q"}'
                 REDIS.hdel('instagram_urls', urllib.quote(url, ":/?=&,"))
             
             print "%s:request (%s)." % (datetime.datetime.today(), url)
@@ -208,7 +208,10 @@ class InstagramSpider(Spider):
             if REDIS.hexists('instagram_posts', item_post['date']):
                 self.rescrapys -= 1
                 if (self.rescrapys <= 0):
-                    return
+                    if RESUME_BROKEN:
+                        pass
+                    else:
+                        return
             else:
                 REDIS.hset('instagram_posts', item_post['date'], item_post['id']) #缓存
                 get_mysql4post(item_post, item_user) #写数据库
