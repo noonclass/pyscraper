@@ -35,7 +35,8 @@ class InstagramPostItem(scrapy.Item):
     #媒体信息
     thumbnail_url       = scrapy.Field() #图片-缩略图地址
     display_url         = scrapy.Field() #图片-原图地址
-    display_res         = scrapy.Field() #图片-存储路径
+    save_domain         = scrapy.Field() #图片-存储域
+    save_name           = scrapy.Field() #图片-存储路径
     width               = scrapy.Field() #尺寸，图片/视频相同
     height              = scrapy.Field() #尺寸，...
     is_video            = scrapy.Field() #视频？

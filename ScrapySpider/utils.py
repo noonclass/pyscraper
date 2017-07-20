@@ -28,8 +28,8 @@ def retry(attempt):
                 #requests.exceptions.SSLError
                 except Exception as e:
                     print e
-                    time.sleep(random.randint(0, 10))
                     att += 1
+                    time.sleep(att * random.randint(3, 20))
         return wrapper
     return decorator
 
@@ -38,5 +38,5 @@ def retry(attempt):
 @retry(attempt=3)
 def get_response(url):
     #requests超时时间默认是 urllib3 中的 DEFAULT_TIMEOUT, getdefaulttimeout  默认的超时时间是 None，亦即连接永远不会超时。
-    response = requests.get(url, timeout=15)
+    response = requests.get(url, timeout=20)
     return response

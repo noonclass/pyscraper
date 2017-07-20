@@ -53,7 +53,7 @@ class InstagramPipeline(object):
         if not os.path.exists(path):
             os.makedirs(path)
         
-        file = path + '/' + item['display_res']
+        file = path + '/' + item['save_name']
         
         if not os.path.exists(file):
             print "%s:pipeline request (%s)." % (datetime.datetime.today(), url)

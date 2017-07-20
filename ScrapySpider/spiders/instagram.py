@@ -23,7 +23,7 @@ logging.basicConfig(
 REDIS = redis.Redis(host='127.0.0.1', port=6379, db=0)
 
 ## 断点续传开关
-RESUME_BROKEN = True
+RESUME_BROKEN = False
 
 def get_mysql4user(user):
     sql = u"INSERT INTO `wp_users` (`ID`, `user_login`, `user_pass`, `user_nicename`, `user_email`, `user_registered`, `user_activation_key`, `user_status`, `display_name`) VALUES ({}, '{}', '$P$Bv4tMmzqpt9nBWKAdo7FUMUajheklN0', '{}', '{}@hotlinks.org', '1999-09-09 09:09:09', '', 0, '{}');".format(user['id'], user['username'], user['username'], user['username'],  user['full_name'])
@@ -45,7 +45,8 @@ def get_mysql4user(user):
 
 def get_mysql4post(post, user):
     dt = time.strftime("%Y-%m-%d %H:%M:%S",time.localtime(post['date']))
-    sql = ur"""INSERT INTO `wp_posts` (`ID`, `post_author`, `post_date`, `post_date_gmt`, `post_content`, `post_title`, `post_excerpt`, `post_status`, `comment_status`, `ping_status`, `post_password`, `post_name`, `to_ping`, `pinged`, `post_modified`, `post_modified_gmt`, `post_content_filtered`, `post_parent`, `guid`, `menu_order`, `post_type`, `post_mime_type`, `comment_count`) VALUES ({}, {}, '{}', '{}', '<a href="http://m.hotlinks.org/{}/{}" data-rel="lightbox[folio]"><img class="scale-with-grid alignnone size-full" src="http://m.hotlinks.org/{}/{}" alt=""/></a>', '{}', '{}', 'publish', 'open', 'open', '', '{}', '', '', '{}', '{}', '', 0, 'http://hotlinks.org/?p={}', 0, '{}', '', {});""".format(post['id'], user['id'], dt, dt, user['id'], post['display_res'], user['id'], post['display_res'], post['caption'], json.dumps(dict(post.items())).replace("\\'", "\'"), post['shortcode'], dt, dt, post['id'], 'video' if post['is_video'] else 'post', post['comments'])
+    #NOTE:: json.dumps 会转码字串，会将'couldn\'t'替换为'couldn\\'t',其它转为unicode编码如'\u3084\n'
+    sql = ur"""INSERT INTO `wp_posts` (`ID`, `post_author`, `post_date`, `post_date_gmt`, `post_content`, `post_title`, `post_excerpt`, `post_status`, `comment_status`, `ping_status`, `post_password`, `post_name`, `to_ping`, `pinged`, `post_modified`, `post_modified_gmt`, `post_content_filtered`, `post_parent`, `guid`, `menu_order`, `post_type`, `post_mime_type`, `comment_count`) VALUES ({}, {}, '{}', '{}', '<a href="{}/{}/{}" data-rel="lightbox[folio]"><img class="scale-with-grid alignnone size-full" src="{}/{}/{}" alt=""/></a>', '{}', '{}', 'publish', 'open', 'open', '', '{}', '', '', '{}', '{}', '', 0, 'http://hotlinks.org/?p={}', 0, '{}', '', {});""".format(post['id'], user['id'], dt, dt, post['save_domain'], user['id'], post['save_name'], post['save_domain'], user['id'], post['save_name'], post['caption'], json.dumps(dict(post.items())).replace("\\'", "\'"), post['shortcode'], dt, dt, post['id'], 'video' if post['is_video'] else 'post', post['comments'])
     logging.info(sql)
 
 class InstagramSpider(Spider):
@@ -57,8 +58,10 @@ class InstagramSpider(Spider):
         logging.info('-- Generation Time: %s' % (datetime.datetime.today()))
         
         urls = [
-            #'https://www.instagram.com/moeka_nozaki/',
-            'https://www.instagram.com/cocoannne/',
+            #'https://www.instagram.com/moeka_nozaki/',        #39516-1
+            #'https://www.instagram.com/cocoannne/',           #173008-1        #hot
+            #'https://www.instagram.com/maggymoon/',           #263325-1        #hot
+            'https://www.instagram.com/saekoofficial/',
         ]
         for url in urls:
             print "%s:request (%s)." % (datetime.datetime.today(), url)
@@ -73,6 +76,7 @@ class InstagramSpider(Spider):
         
         #获取动态配置，用来构造自动加载更多内容的请求时，查询ID是必带参数
         url = 'https://www.instagram.com' + ''.join(response.xpath('//script[contains(@src, "Commons.js")]/@src').extract())
+        print "%s:request (%s)." % (datetime.datetime.today(), url)
         javascript = get_response(url)
         javascript = javascript.text
         pattern = re.compile(r'PROFILE_POSTS_UPDATED(.*?)queryId:"(\d+)"', re.S)
@@ -80,7 +84,7 @@ class InstagramSpider(Spider):
         
         pattern = re.compile(r'COMMENT_REQUEST_UPDATED(.*?)queryId:"(\d+)"', re.S)
         item_user['query_id2'] = re.search(pattern, javascript).group(2) #评论查询ID
-
+        
         #获取内容，当前页面的图片获取主逻辑
         javascript = ''.join(response.xpath('//script[contains(text(), "sharedData")]/text()').extract())
         json_data = json.loads(''.join(re.findall(r'window._sharedData = (.*);', javascript)))
@@ -114,7 +118,8 @@ class InstagramSpider(Spider):
             item_post['query_id'] = item_user['query_id2']
             item_post['thumbnail_url'] = node['thumbnail_src']
             item_post['display_url'] = node['display_src']
-            item_post['display_res'] = os.path.basename(item_post['display_url'])
+            item_post['save_domain'] = 'http://m.hotlinks.org'
+            item_post['save_name'] = os.path.basename(item_post['display_url'])
             item_post['width'] = node['dimensions']['width']
             item_post['height'] = node['dimensions']['height']
             item_post['is_video'] = node['is_video']
@@ -142,7 +147,7 @@ class InstagramSpider(Spider):
             url = 'https://www.instagram.com/graphql/query/?query_id=' + str(item_user['query_id']) + '&variables={"id":"' + item_user['id'] +'","first":12,"after":"'+ page['end_cursor'] +'"}'
             ##
             if RESUME_BROKEN:
-                url = 'https://www.instagram.com/graphql/query/?query_id=' + str(item_user['query_id']) + '&variables={"id":"' + item_user['id'] +'","first":12,"after":"AQCOz2vygr7ZJMTwbPNpDpwJl_4i1beCnlowVmwnvwMpNNY-xlU7-DVw1LLqhXWtsBI2u2O5Ys8GfmO_5SN2AS3g9ZiROGXk6vwXFwOQZhz98Q"}'
+                url = 'https://www.instagram.com/graphql/query/?query_id=' + str(item_user['query_id']) + '&variables={"id":"' + item_user['id'] +'","first":12,"after":"AQCXB7EBzOA7ojIomTrr0Cofs3OuzmlbpzTGDDOQg7V5e-JrG41x1xGKlLv7nsYQhn715FDqGPx79ldOu0oASxkSAPmvz-Ib19Jv2LhldNGsoA"}'
                 REDIS.hdel('instagram_urls', urllib.quote(url, ":/?=&,"))
             
             print "%s:request (%s)." % (datetime.datetime.today(), url)
@@ -198,7 +203,8 @@ class InstagramSpider(Spider):
             item_post['thumbnail_url'] = node['node']['thumbnail_src']
             item_post['width'] = node['node']['dimensions']['width']
             item_post['display_url'] = node['node']['display_url']
-            item_post['display_res'] = os.path.basename(item_post['display_url'])
+            item_post['save_domain'] = 'http://m.hotlinks.org'
+            item_post['save_name'] = os.path.basename(item_post['display_url'])
             item_post['width'] = node['node']['dimensions']['width']
             item_post['height'] = node['node']['dimensions']['height']
             item_post['is_video'] = node['node']['is_video']
