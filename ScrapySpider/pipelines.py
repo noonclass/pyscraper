@@ -5,14 +5,12 @@
 # Don't forget to add your pipeline to the ITEM_PIPELINES setting
 # See: http://doc.scrapy.org/en/latest/topics/item-pipeline.html
 
-import os
 import json
-import time
 import redis
 import logging
-import datetime
-from ScrapySpider.utils import get_response
-from ScrapySpider.items import InstagramPostItem, InstagramCommentItem
+import threading
+from ScrapySpider.utils import *
+from ScrapySpider.items import *
 
 ## sql写文件
 logging.basicConfig(
@@ -23,72 +21,92 @@ logging.basicConfig(
 
 ## 缓存连接
 REDIS = redis.Redis(host='127.0.0.1', port=6379, db=0)
-## 评论ID，不可重复。启动前必须配合数据库表当前值
-COMMENT_INDEX = int(REDIS.get('instagram_comment_id')) if REDIS.get('instagram_comment_id') else 1
 
 def get_mysql4comment(comment, post):
-    global COMMENT_INDEX
     dt = time.strftime("%Y-%m-%d %H:%M:%S",time.localtime(comment['date']))
-    sql = ur"""INSERT INTO `wp_comments` (`comment_ID`, `comment_post_ID`, `comment_author`, `comment_date`, `comment_date_gmt`, `comment_content`, `user_id`) VALUES ({}, {}, '{}', '{}', '{}', '{}', {});""".format(COMMENT_INDEX, post['id'], comment['user'], dt, dt, comment['text'], comment['uid'])
+    sql = ur"""INSERT INTO `wp_comments` (`comment_ID`, `comment_post_ID`, `comment_author`, `comment_date`, `comment_date_gmt`, `comment_content`, `user_id`) VALUES ({}, {}, '{}', '{}', '{}', '{}', {});""".format(comment['id'], post['id'], comment['owner_username'], dt, dt, comment['text'], comment['owner_id'])
     logging.info(sql)
-    sql = u"INSERT INTO `wp_commentmeta` (`comment_id`, `meta_key`, `meta_value`) VALUES ({}, 'si_avatar', '{}');".format(COMMENT_INDEX, comment['avatar'])
+    sql = u"INSERT INTO `wp_commentmeta` (`comment_id`, `meta_key`, `meta_value`) VALUES ({}, 'si_avatar', '{}');".format(comment['id'], comment['owner_avatar'])
     logging.info(sql)
-    #自动生成最大评论ID
-    COMMENT_INDEX += 1
-    REDIS.set('instagram_comment_id', COMMENT_INDEX)
-
-BASE = r'D:/Media/'
 
 ## 下载图片并保存到本地
 class InstagramPipeline(object):
     def process_item(self, item, spider):
-        if not isinstance(item, InstagramPostItem):
+        if not isinstance(item, InstagramMediaItem):
             return
         
-        #下载图片地址
-        url = item['display_url']
+        #下载图片
+        media_dl(item['display_url'], item['save_name'], item['owner_id'])
+        if item['type'] == 'GraphVideo':#只记录不下载视频
+            logging.info('-- Pending media: %s' % (datetime.datetime.today(), item['video_url']))
         
-        #创建文件夹，拼接真实的目标路径
-        path = BASE + item['uid']
-        if not os.path.exists(path):
-            os.makedirs(path)
+        # Gallery相册处理，下载相册每页数据
+        if item['type'] == 'GraphSidecar':
+            for node in item['sidecar_edges']:
+                media_dl(node['node']['display_url'], node['node']['save_name'], item['owner_id'])
+                if node['node']['__typename'] == 'GraphVideo':#只记录不下载视频
+                    logging.info('-- Pending media: %s' % (datetime.datetime.today(), node['node']['video_url']))
         
-        file = path + '/' + item['save_name']
-        
-        if not os.path.exists(file):
-            print "%s:pipeline request (%s)." % (datetime.datetime.today(), url)
-            image = get_response(url)
-            f = open(file, 'wb')
-            f.write(image.content)
-            f.close()
-        
-        #获取评论信息，为了简单只取一次，时间上由远及近，取300条评论(默认为30条)
-        url = 'https://www.instagram.com/graphql/query/?query_id=' + str(item['query_id']) + '&variables={"shortcode":"' + item['shortcode'] +'","first":300}'
-        
-        #@缓存请求链接的过滤，以减轻压力和防止被屏蔽
-        if REDIS.hexists('instagram_urls', url) and (int(REDIS.hget('instagram_urls', url)) == item['comments']):
-            print "%s:pipeline exists (%s) (%s) (%s)." % (datetime.datetime.today(), REDIS.hexists('instagram_urls', url), int(REDIS.hget('instagram_urls', url)), item['comments'])
-            return item
-        
-        #reactor.callInThread(self.DO_SOME_SYNC_OPERATION, argv) #线程池
-        print "%s:pipeline request (%s)." % (datetime.datetime.today(), url)
-        response = get_response(url)
-        json_data = json.loads(response.text)
-        data  = json_data['data']
-        nodes = data['shortcode_media']['edge_media_to_comment']['edges']
-        for node in nodes:
+        # 已获取最新32条评论的处理
+        i = 0
+        for node in item['comment_edges']:
+            i += 1
             item_comment = InstagramCommentItem() #评论信息
-            item_comment['user'] = node['node']['owner']['username']
-            item_comment['uid']  = node['node']['owner']['id']
+            item_comment['id']  = node['node']['id']
             item_comment['date'] = node['node']['created_at']
             item_comment['text'] = node['node']['text'].replace(r"'", r"\'")
-            item_comment['avatar'] = node['node']['owner']['profile_pic_url']
+            item_comment['owner_id'] = node['node']['owner']['id']
+            item_comment['owner_username'] = node['node']['owner']['username']
+            item_comment['owner_avatar'] = node['node']['owner']['profile_pic_url']
+            if i % 2 == 0:#奇偶判定，使用两个线程'并发'处理avatar
+                media_dl(item_comment['owner_avatar'])
+            else:
+                th = threading.Thread(target=media_dl,args=(item_comment['owner_avatar'],))
+                th.start()
             
-            if not REDIS.hexists(item['id'], item_comment['date']):
-                REDIS.hset(item['id'], item_comment['date'], '') #缓存
+            if not REDIS.hexists(item['id'], item_comment['id']):
+                REDIS.hset(item['id'], item_comment['id'], '') #缓存
                 get_mysql4comment(item_comment, item) #写数据库
         
-        #@缓存请求链接
-        REDIS.hset('instagram_urls', url, item['comments'])
+        while item['comment_page_info']['has_next_page']:
+            end_cursor = item['comment_page_info']['end_cursor']
+            
+            #获取更多评论信息，为了简单只取一次，时间上由远及近，取300条评论(默认为30条)
+            url = 'https://www.instagram.com/graphql/query/?query_id=' + str(item['query_id']) + '&variables={"shortcode":"' + item['shortcode'] +'","first":300,"after":"'+ end_cursor +'"}'
+            
+            #@缓存请求链接的过滤，以减轻压力和防止被屏蔽
+            if REDIS.hexists('instagram_comment_urls', url) and (int(REDIS.hget('instagram_comment_urls', url)) == item['comment_count']):
+                print "%s:pipeline exists (%s) (%s) (%s)." % (datetime.datetime.today(), REDIS.hexists('instagram_comment_urls', url), int(REDIS.hget('instagram_comment_urls', url)), item['comment_count'])
+                return item
+            
+            #reactor.callInThread(self.DO_SOME_SYNC_OPERATION, argv) #线程池
+            print "%s:pipeline request (%s)." % (datetime.datetime.today(), url)
+            response = get_response(url)
+            data = response.json()
+            item['comment_page_info'] = data['data']['shortcode_media']['edge_media_to_comment']['page_info']
+            item['comment_edges'] = data['data']['shortcode_media']['edge_media_to_comment']['edges']
+            
+            i = 0
+            for node in item['comment_edges']:
+                i += 1
+                item_comment = InstagramCommentItem() #评论信息
+                item_comment['id']  = node['node']['id']
+                item_comment['date'] = node['node']['created_at']
+                item_comment['text'] = node['node']['text'].replace(r"'", r"\'")
+                item_comment['owner_id'] = node['node']['owner']['id']
+                item_comment['owner_username'] = node['node']['owner']['username']
+                item_comment['owner_avatar'] = node['node']['owner']['profile_pic_url']
+                if i % 2 == 0:#奇偶判定，使用两个线程'并发'处理avatar
+                    media_dl(item_comment['owner_avatar'])
+                else:
+                    th = threading.Thread(target=media_dl,args=(item_comment['owner_avatar'],))
+                    th.start()
+                
+                if not REDIS.hexists(item['id'], item_comment['id']):
+                    REDIS.hset(item['id'], item_comment['id'], '') #缓存
+                    get_mysql4comment(item_comment, item) #写数据库
+            
+            #@缓存请求链接
+            REDIS.hset('instagram_comment_urls', url, item['comment_count'])
         
         return item

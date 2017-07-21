@@ -1,16 +1,14 @@
 # -*- coding: utf-8 -*-
 
-import os
 import re
 import json
-import time
 import redis
 import urllib
 import logging
-import datetime
+import threading
 from scrapy import Spider, Request
-from ScrapySpider.utils import get_extracted, get_response
-from ScrapySpider.items import InstagramUserItem, InstagramPostItem
+from ScrapySpider.utils import *
+from ScrapySpider.items import *
 
 ## sql写文件
 logging.basicConfig(
@@ -36,18 +34,49 @@ def get_mysql4user(user):
     logging.info(sql)
     sql = u"INSERT INTO `wp_usermeta` (`user_id`, `meta_key`, `meta_value`) VALUES ({}, 'si_avatar', '{}');".format(user['id'], user['avatar'])
     logging.info(sql)
-    sql = u"INSERT INTO `wp_usermeta` (`user_id`, `meta_key`, `meta_value`) VALUES ({}, 'si_followed', '{}');".format(user['id'], user['followed'])
+    sql = u"INSERT INTO `wp_usermeta` (`user_id`, `meta_key`, `meta_value`) VALUES ({}, 'si_followed', '{}');".format(user['id'], user['followed_count'])
     logging.info(sql)
-    sql = u"INSERT INTO `wp_usermeta` (`user_id`, `meta_key`, `meta_value`) VALUES ({}, 'si_follows', '{}');".format(user['id'], user['follows'])
+    sql = u"INSERT INTO `wp_usermeta` (`user_id`, `meta_key`, `meta_value`) VALUES ({}, 'si_follows', '{}');".format(user['id'], user['follows_count'])
     logging.info(sql)
-    sql = u"INSERT INTO `wp_usermeta` (`user_id`, `meta_key`, `meta_value`) VALUES ({}, 'si_posts', '{}');".format(user['id'], user['posts'])
+    sql = u"INSERT INTO `wp_usermeta` (`user_id`, `meta_key`, `meta_value`) VALUES ({}, 'si_posts', '{}');".format(user['id'], user['media_count'])
     logging.info(sql)
 
 def get_mysql4post(post, user):
     dt = time.strftime("%Y-%m-%d %H:%M:%S",time.localtime(post['date']))
+    #拼接Content
+    post_content = u''
+    if post['type'] == 'GraphImage':
+        image_src = u'{}/{}/{}'.format(post['save_domain'], user['id'], post['save_name'])
+        post_content += u'<a href="{}" data-rel="lightbox[folio]"><img class="scale-with-grid alignnone" src="{}" alt=""/></a>'.format(image_src, image_src)
+    elif post['type'] == 'GraphVideo':
+        image_src = u'{}/{}/{}'.format(post['save_domain'], user['id'], post['save_name'])
+        post_content += u'<a href="{}" data-rel="lightbox[folio]"><video class="scale-with-grid alignnone" playsinline="" poster="{}" src="{}" preload="none" type="video/mp4"/></a>'.format(image_src, image_src, post['video_url'])
+    elif post['type'] == 'GraphSidecar':
+        for node in post['sidecar_edges']:
+            if node['node']['__typename'] == 'GraphImage':
+                image_src = u'{}/{}/{}'.format(node['node']['save_domain'], user['id'], node['node']['save_name'])
+                post_content += u'<a href="{}" data-rel="lightbox[folio]"><img class="scale-with-grid alignnone" src="{}" alt=""/></a>'.format(image_src, image_src)
+            elif node['node']['__typename'] == 'GraphVideo':
+                image_src = u'{}/{}/{}'.format(node['node']['save_domain'], user['id'], node['node']['save_name'])
+                post_content += u'<a href="{}" data-rel="lightbox[folio]"><video class="scale-with-grid alignnone" playsinline="" poster="{}" src="{}" preload="none" type="video/mp4"/></a>'.format(image_src, image_src, node['node']['video_url'])
+            else:
+                print "%s:type error (%s)." % (datetime.datetime.today(), node['node']['__typename'])
+    else:
+        print "%s:type error (%s)." % (datetime.datetime.today(), post['type'])
     #NOTE:: json.dumps 会转码字串，会将'couldn\'t'替换为'couldn\\'t',其它转为unicode编码如'\u3084\n'
-    sql = ur"""INSERT INTO `wp_posts` (`ID`, `post_author`, `post_date`, `post_date_gmt`, `post_content`, `post_title`, `post_excerpt`, `post_status`, `comment_status`, `ping_status`, `post_password`, `post_name`, `to_ping`, `pinged`, `post_modified`, `post_modified_gmt`, `post_content_filtered`, `post_parent`, `guid`, `menu_order`, `post_type`, `post_mime_type`, `comment_count`) VALUES ({}, {}, '{}', '{}', '<a href="{}/{}/{}" data-rel="lightbox[folio]"><img class="scale-with-grid alignnone size-full" src="{}/{}/{}" alt=""/></a>', '{}', '{}', 'publish', 'open', 'open', '', '{}', '', '', '{}', '{}', '', 0, 'http://hotlinks.org/?p={}', 0, '{}', '', {});""".format(post['id'], user['id'], dt, dt, post['save_domain'], user['id'], post['save_name'], post['save_domain'], user['id'], post['save_name'], post['caption'], json.dumps(dict(post.items())).replace("\\'", "\'"), post['shortcode'], dt, dt, post['id'], 'video' if post['is_video'] else 'post', post['comments'])
+    post2 = InstagramMediaItem(post)
+    post2['comment_page_info'] = scrapy.Field()
+    post2['comment_edges'] = scrapy.Field()
+    sql = ur"""INSERT INTO `wp_posts` (`ID`, `post_author`, `post_date`, `post_date_gmt`, `post_content`, `post_title`, `post_excerpt`, `post_status`, `comment_status`, `ping_status`, `post_password`, `post_name`, `to_ping`, `pinged`, `post_modified`, `post_modified_gmt`, `post_content_filtered`, `post_parent`, `guid`, `menu_order`, `post_type`, `post_mime_type`, `comment_count`) VALUES ({}, {}, '{}', '{}', '{}', '{}', '{}', 'publish', 'open', 'open', '', '{}', '', '', '{}', '{}', '', 0, 'http://hotlinks.org/?p={}', 0, '{}', '', {});""".format(post['id'], user['id'], dt, dt, post_content, post['caption'], json.dumps(dict(post2.items())).replace("\\'", "\'"), post['shortcode'], dt, dt, post['id'], 'post', post['comment_count'])
     logging.info(sql)
+    
+    #NOTE:: post-format-video[1], post-format-gallery[2], post-format-image[0]. Uncategorized is 0 by default
+    if post['type'] == 'GraphVideo':
+        sql = u"INSERT INTO `wp_term_relationships` (`object_id`, `term_taxonomy_id`, `term_order`) VALUES ({}, {}, 0);".format(post['id'], 1)
+        logging.info(sql)
+    elif post['type'] == 'GraphSidecar':
+        sql = u"INSERT INTO `wp_term_relationships` (`object_id`, `term_taxonomy_id`, `term_order`) VALUES ({}, {}, 0);".format(post['id'], 2)
+        logging.info(sql)
 
 class InstagramSpider(Spider):
     name = 'instagram'
@@ -81,7 +110,7 @@ class InstagramSpider(Spider):
         javascript = javascript.text
         pattern = re.compile(r'PROFILE_POSTS_UPDATED(.*?)queryId:"(\d+)"', re.S)
         item_user['query_id'] = re.search(pattern, javascript).group(2) #文章查询ID
-        
+         
         pattern = re.compile(r'COMMENT_REQUEST_UPDATED(.*?)queryId:"(\d+)"', re.S)
         item_user['query_id2'] = re.search(pattern, javascript).group(2) #评论查询ID
         
@@ -96,37 +125,39 @@ class InstagramSpider(Spider):
         item_user['username'] = data['user']['username']
         item_user['full_name'] = data['user']['full_name'].replace(r"'", r"\'") if data['user']['full_name'] else ''
         item_user['avatar'] = data['user']['profile_pic_url']
-        item_user['followed'] = data['user']['followed_by']['count']
-        item_user['follows'] = data['user']['follows']['count']
-        item_user['posts'] = data['user']['media']['count']
+        th = threading.Thread(target=media_dl,args=(item_user['avatar'],))
+        th.start()
+        item_user['followed_count'] = data['user']['followed_by']['count']
+        item_user['follows_count'] = data['user']['follows']['count']
+        item_user['media_count'] = data['user']['media']['count']
         
         self.log('parse user %s' % item_user["full_name"])
         get_mysql4user(item_user) #写数据库
         
         for node in data['user']['media']['nodes']:
-            item_post = InstagramPostItem() #文章信息
+            item_post = InstagramMediaItem() #文章信息
+            item_post['type'] = node['__typename']
             item_post['id'] = node['id']
-            item_post['uid'] = item_user['id']
+            item_post['owner_id'] = node['owner']['id']
             try:
                 item_post['caption'] = node['caption'].replace(r"'", r"\'") if node.has_key('caption') else ''
             except Exception:
                 item_post['caption'] = ''
             item_post['date'] = node['date']
-            item_post['likes'] = node['likes']['count']
-            item_post['comments'] = node['comments']['count']
+            item_post['like_count'] = node['likes']['count']
+            item_post['comment_count'] = node['comments']['count']
             item_post['shortcode'] = node['code']
             item_post['query_id'] = item_user['query_id2']
             item_post['thumbnail_url'] = node['thumbnail_src']
             item_post['display_url'] = node['display_src']
-            item_post['save_domain'] = 'http://m.hotlinks.org'
+            item_post['save_domain'] = DOMAIN
             item_post['save_name'] = os.path.basename(item_post['display_url'])
             item_post['width'] = node['dimensions']['width']
             item_post['height'] = node['dimensions']['height']
             item_post['is_video'] = node['is_video']
-            self.parse_video(item_post, item_user)
             
             self.log('parse post %s' % item_post['display_url'])
-            if REDIS.hexists('instagram_posts', item_post['date']):
+            if REDIS.hexists('instagram_posts', item_post['id']):
                 self.rescrapys -= 1 #已缓存，倒数12个退出爬取
                 if (self.rescrapys <= 0):
                     if RESUME_BROKEN:
@@ -134,7 +165,8 @@ class InstagramSpider(Spider):
                     else:
                         return
             else:
-                REDIS.hset('instagram_posts', item_post['date'], item_post['id']) #缓存
+                REDIS.hset('instagram_posts', item_post['id'], item_post['date']) #缓存
+                self.parse_single(item_post, item_user)
                 get_mysql4post(item_post, item_user) #写数据库
             
             #触发 PIPE
@@ -182,9 +214,10 @@ class InstagramSpider(Spider):
         self.log('parse2 user %s...' % item_user["full_name"])
         
         for node in nodes:
-            item_post = InstagramPostItem() #文章信息
+            item_post = InstagramMediaItem() #文章信息
+            item_post['type'] = node['node']['__typename']
             item_post['id'] = node['node']['id']
-            item_post['uid'] = item_user['id']
+            item_post['owner_id'] = node['node']['owner']['id']
             try:
                 item_post['caption'] = node['node']['edge_media_to_caption']['edges'][0]['node']['text']
             except KeyError:
@@ -194,24 +227,23 @@ class InstagramSpider(Spider):
             item_post['caption'] = item_post['caption'].replace(r"'", r"\'")
             item_post['date'] = node['node']['taken_at_timestamp']
             try:
-                item_post['likes'] = node['node']['edge_liked_by']['count']
+                item_post['like_count'] = node['node']['edge_liked_by']['count']
             except KeyError:
-                item_post['likes'] = node['node']['edge_media_preview_like']['count']
-            item_post['comments'] = node['node']['edge_media_to_comment']['count']
+                item_post['like_count'] = node['node']['edge_media_preview_like']['count']
+            item_post['comment_count'] = node['node']['edge_media_to_comment']['count']
             item_post['shortcode'] = node['node']['shortcode']
             item_post['query_id'] = item_user['query_id2']
             item_post['thumbnail_url'] = node['node']['thumbnail_src']
             item_post['width'] = node['node']['dimensions']['width']
             item_post['display_url'] = node['node']['display_url']
-            item_post['save_domain'] = 'http://m.hotlinks.org'
+            item_post['save_domain'] = DOMAIN
             item_post['save_name'] = os.path.basename(item_post['display_url'])
             item_post['width'] = node['node']['dimensions']['width']
             item_post['height'] = node['node']['dimensions']['height']
             item_post['is_video'] = node['node']['is_video']
-            self.parse_video(item_post, item_user)
             
             self.log('parse post %s' % item_post['display_url'])
-            if REDIS.hexists('instagram_posts', item_post['date']):
+            if REDIS.hexists('instagram_posts', item_post['id']):
                 self.rescrapys -= 1
                 if (self.rescrapys <= 0):
                     if RESUME_BROKEN:
@@ -219,7 +251,8 @@ class InstagramSpider(Spider):
                     else:
                         return
             else:
-                REDIS.hset('instagram_posts', item_post['date'], item_post['id']) #缓存
+                REDIS.hset('instagram_posts', item_post['id'], item_post['date']) #缓存
+                self.parse_single(item_post, item_user)
                 get_mysql4post(item_post, item_user) #写数据库
                 
             #触发 PIPE
@@ -235,14 +268,29 @@ class InstagramSpider(Spider):
         
         print "%s:parse2 end." % datetime.datetime.today()
     
-    def parse_video(self, post, user):
-        """视频的处理：只保存链接，没有下载视频文件
+    def parse_single(self, post, user):
+        """更多数据的收集
         """
-        if post['is_video']:
-            url = 'https://www.instagram.com/p/' + post['shortcode'] + '/?taken-by=' + user['username'] +'&__a=1'
-            response = get_response(url)
-            json_data = json.loads(response.text)
-            data  = json_data['graphql']
-            post['video_url']  = data['shortcode_media']['video_url']
-            post['video_views']  = data['shortcode_media']['video_view_count']
-        pass
+        url = 'https://www.instagram.com/p/' + post['shortcode'] + '/?taken-by=' + user['username'] +'&__a=1'
+        print "%s:request (%s)." % (datetime.datetime.today(), url)
+        response = get_response(url)
+        data = response.json()
+        media  = data['graphql']['shortcode_media']
+        
+        #保持地理位置位置、最新评论、相册集等数据
+        post['location'] = media['location']
+        post['comment_page_info'] = media['edge_media_to_comment']['page_info']
+        post['comment_edges'] = media['edge_media_to_comment']['edges']
+        
+        if post['type'] == 'GraphImage':
+            pass
+        elif post['type'] == 'GraphVideo':
+            post['video_url']  = media['video_url']
+            post['video_view_count']  = media['video_view_count']
+        elif post['type'] == 'GraphSidecar':
+            post['sidecar_edges'] = media['edge_sidecar_to_children']['edges']
+            for node in post['sidecar_edges']:
+                node['node']['save_domain'] = DOMAIN
+                node['node']['save_name'] = os.path.basename(node['node']['display_url'])
+        else:
+            pass
