@@ -5,14 +5,8 @@
 # Don't forget to add your pipeline to the ITEM_PIPELINES setting
 # See: http://doc.scrapy.org/en/latest/topics/item-pipeline.html
 
-import json
-import redis
-import threading
 from ScrapySpider.utils import *
 from ScrapySpider.items import *
-
-## 缓存连接
-REDIS = redis.Redis(host='127.0.0.1', port=6379, db=0)
 
 def get_mysql4comment(comment, media):
     dt = time.strftime("%Y-%m-%d %H:%M:%S",time.localtime(comment['date']))
@@ -30,14 +24,14 @@ class InstagramPipeline(object):
         #下载图片
         media_dl(item['display_url'], item['save_name'], item['owner_id'])
         if item['type'] == 'GraphVideo':#只记录不下载视频
-            logger.info('-- Pending media: %s' % (datetime.datetime.today(), item['video_url']))
+            logger.info('-- Pending video: %s' % (item['video_url']))
         
         # Gallery相册处理，下载相册每页数据
         if item['type'] == 'GraphSidecar':
             for node in item['sidecar_edges']:
                 media_dl(node['node']['display_url'], node['node']['save_name'], item['owner_id'])
                 if node['node']['__typename'] == 'GraphVideo':#只记录不下载视频
-                    logger.info('-- Pending media: %s' % (datetime.datetime.today(), node['node']['video_url']))
+                    logger.info('-- Pending video: %s' % (node['node']['video_url']))
         
         # Media评论处理，缓存评论数
         if REDIS.hexists('instagram_comments', item['id']) and (int(REDIS.hget('instagram_comment_urls', item['id'])) == item['comment_count']):
@@ -45,9 +39,7 @@ class InstagramPipeline(object):
             return item
         
         # 已缓存最新32条评论的处理
-        i = 0
         for node in item['comment_edges']:
-            i += 1
             item_comment = InstagramCommentItem() #评论信息
             item_comment['id']  = node['node']['id']
             item_comment['date'] = node['node']['created_at']
@@ -55,11 +47,7 @@ class InstagramPipeline(object):
             item_comment['owner_id'] = node['node']['owner']['id']
             item_comment['owner_username'] = node['node']['owner']['username']
             item_comment['owner_avatar'] = node['node']['owner']['profile_pic_url']
-            if i % 2 == 0:#奇偶判定，使用两个线程'并发'处理avatar
-                media_dl(item_comment['owner_avatar'])
-            else:
-                th = threading.Thread(target=media_dl,args=(item_comment['owner_avatar'],))
-                th.start()
+            REDIS.lpush('instagram_avatars', item_comment['owner_avatar'])
             
             if not REDIS.hexists(item['id'], item_comment['id']):
                 REDIS.hset(item['id'], item_comment['id'], '') #缓存
@@ -82,9 +70,7 @@ class InstagramPipeline(object):
             item['comment_page_info'] = data['data']['shortcode_media']['edge_media_to_comment']['page_info']
             item['comment_edges'] = data['data']['shortcode_media']['edge_media_to_comment']['edges']
             
-            i = 0
             for node in item['comment_edges']:
-                i += 1
                 item_comment = InstagramCommentItem() #评论信息
                 item_comment['id']  = node['node']['id']
                 item_comment['date'] = node['node']['created_at']
@@ -92,11 +78,7 @@ class InstagramPipeline(object):
                 item_comment['owner_id'] = node['node']['owner']['id']
                 item_comment['owner_username'] = node['node']['owner']['username']
                 item_comment['owner_avatar'] = node['node']['owner']['profile_pic_url']
-                if i % 2 == 0:#奇偶判定，使用两个线程'并发'处理avatar
-                    media_dl(item_comment['owner_avatar'])
-                else:
-                    th = threading.Thread(target=media_dl,args=(item_comment['owner_avatar'],))
-                    th.start()
+                REDIS.lpush('instagram_avatars', item_comment['owner_avatar'])
                 
                 if not REDIS.hexists(item['id'], item_comment['id']):
                     REDIS.hset(item['id'], item_comment['id'], '') #缓存

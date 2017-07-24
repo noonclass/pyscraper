@@ -2,10 +2,12 @@
 
 import os
 import time
+import redis
 import random
 import logging
 import datetime
 import requests
+import threading
 
 """
 @定制日志输出
@@ -33,13 +35,15 @@ LOGGING = {
             # The values below are popped from this dictionary and
             # used to create the handler, set the handler's level and
             # its formatter.
-            "class": "logging.handlers.TimedRotatingFileHandler",
+            'class': 'logging.handlers.TimedRotatingFileHandler',
             'level':'INFO',
             'formatter': 'simple',
             # The values below are passed to the handler creator callable
             # as keyword arguments.
             'filename': 'spider.sql',
-            "backupCount": 100,
+            'when': 'midnight',
+            'interval': 1,
+            'backupCount': 365,
             'encoding': 'utf-8'
         }
     },
@@ -55,9 +59,9 @@ LOGGING = {
             'propagate': False
         }
     },
-    "root": {
-        "level": "NOTSET",
-        "handlers": ["null"]
+    'root': {
+        'level': 'NOTSET',
+        'handlers': ['null']
     }
 }
 
@@ -132,9 +136,27 @@ def media_dl(src_url, dst_name='', user_id='avatar'):
         print "%s:request (%s)." % (datetime.datetime.today(), src_url)
         image = get_response(src_url)
         if not image:
-            print "%s:request error (%s)." % (datetime.datetime.today(), src_url)
+            logger.info('-- Pending media: %s' % (src_url))
             return
         f = open(save_file, 'wb')
         f.write(image.content)
         f.close()
-    
+
+"""
+@下载头像资源
+"""
+REDIS  = redis.Redis(host='127.0.0.1', port=6379, db=0)
+REDIS2 = redis.Redis(host='127.0.0.1', port=6379, db=0)
+def avatar_dl(timeout=600):
+    i = 0
+    key, url = REDIS2.brpop('instagram_avatars', timeout)
+    while url:
+        i += 1
+        if i % 10 == 0:#使用10个线程'并发'处理avatar
+            media_dl(url)
+        else:
+            th = threading.Thread(target=media_dl,args=(url,))
+            th.start()
+        
+        #iterator
+        key, url = REDIS2.brpop(key, timeout)

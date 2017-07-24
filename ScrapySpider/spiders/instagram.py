@@ -2,15 +2,10 @@
 
 import re
 import json
-import redis
 import urllib
-import threading
 from scrapy import Spider, Request
 from ScrapySpider.utils import *
 from ScrapySpider.items import *
-
-## 缓存连接
-REDIS = redis.Redis(host='127.0.0.1', port=6379, db=0)
 
 ## 断点续传开关
 RESUME_BROKEN = False
@@ -119,8 +114,10 @@ class InstagramSpider(Spider):
         item_user['username'] = data['user']['username']
         item_user['full_name'] = data['user']['full_name'].replace(r"'", r"\'") if data['user']['full_name'] else ''
         item_user['avatar'] = data['user']['profile_pic_url']
-        th = threading.Thread(target=media_dl,args=(item_user['avatar'],))
-        th.start()
+        #缓存avatar，放在单独的线程中处理，不影响主线程的处理速度
+        REDIS.lpush('instagram_avatars', item_user['avatar'])
+        thread_avatar = threading.Thread(target=avatar_dl)
+        thread_avatar.start()#@独立线程启动
         item_user['followed_count'] = data['user']['followed_by']['count']
         item_user['follows_count'] = data['user']['follows']['count']
         item_user['media_count'] = data['user']['media']['count']
@@ -165,7 +162,6 @@ class InstagramSpider(Spider):
                 get_mysql4media(item_media, item_user) #写数据库
             
             #触发 PIPE
-            print "%s:item (%s)." % (datetime.datetime.today(), item_media['id'])
             yield item_media
         
         #触发请求：自动加载更多内容
@@ -252,7 +248,6 @@ class InstagramSpider(Spider):
                 get_mysql4media(item_media, item_user) #写数据库
                 
             #触发 PIPE
-            print "%s:item (%s)." % (datetime.datetime.today(), item_media['id'])
             yield item_media
         
         #自动加载更多内容
