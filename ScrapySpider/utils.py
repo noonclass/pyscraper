@@ -2,9 +2,67 @@
 
 import os
 import time
-import datetime
 import random
+import logging
+import datetime
 import requests
+
+"""
+@定制日志输出
+"""
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False, #set to True see skip scrapy running information
+    'formatters': {
+        'default': {
+            'format': '%(asctime)s %(levelname)s %(name)s %(message)s'
+        },
+        'verbose': {
+            'format': '%(levelname)s %(asctime)s %(module)s %(process)d %(thread)d %(message)s'
+        },
+        'simple': {
+            'format': '%(message)s'
+        },
+    },
+    'handlers': {
+        'null': {
+            'level':'DEBUG',
+            'class':'logging.NullHandler',
+        },
+        'mysql_handler':{
+            # The values below are popped from this dictionary and
+            # used to create the handler, set the handler's level and
+            # its formatter.
+            "class": "logging.handlers.TimedRotatingFileHandler",
+            'level':'INFO',
+            'formatter': 'simple',
+            # The values below are passed to the handler creator callable
+            # as keyword arguments.
+            'filename': 'spider.sql',
+            "backupCount": 100,
+            'encoding': 'utf-8'
+        }
+    },
+    'loggers': {
+        'default': {
+            'handlers':['null'],
+            'level':'DEBUG',
+            'propagate': True
+        },
+        'mysql': {
+            'handlers': ['mysql_handler'],
+            'level': 'INFO',
+            'propagate': False
+        }
+    },
+    "root": {
+        "level": "NOTSET",
+        "handlers": ["null"]
+    }
+}
+
+logging.config.dictConfig(LOGGING)
+logger = logging.getLogger('mysql')
 
 """
 @获取列表的第一个元素
@@ -46,7 +104,19 @@ def get_response(url):
 """
 @下载媒体资源
 """
+from sys import platform as _platform
+
 BASE = r'D:/Media/'
+if _platform == "linux" or _platform == "linux2":
+    BASE = r' /root/Pictures/'#root
+    BASE = r'/home/<username>/Downloads/'
+elif _platform == "darwin":
+    BASE = r' /Users/<username>/Downloads/'
+elif _platform == "win32":
+    pass
+elif _platform == "win64":
+    pass
+
 DOMAIN = r'http://m.hotlinks.org'
 def media_dl(src_url, dst_name='', user_id='avatar'):
     save_path = BASE + user_id
@@ -60,7 +130,7 @@ def media_dl(src_url, dst_name='', user_id='avatar'):
     
     if not os.path.exists(save_file):
         print "%s:request (%s)." % (datetime.datetime.today(), src_url)
-        image = get_response('https://ig-s-d-a.akamaihd.com/123/10665410_490343621069339_798024183_a.jpg')
+        image = get_response(src_url)
         if not image:
             print "%s:request error (%s)." % (datetime.datetime.today(), src_url)
             return
