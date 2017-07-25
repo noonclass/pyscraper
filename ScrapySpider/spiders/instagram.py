@@ -34,18 +34,18 @@ def get_mysql4media(media, user):
     content = u''
     if media['type'] == 'GraphImage':
         image_src = u'{}/{}/{}'.format(media['save_domain'], user['id'], media['save_name'])
-        content += u'<a href="{}" data-rel="lightbox[folio]"><img class="scale-with-grid alignnone" src="{}" alt=""/></a>'.format(image_src, image_src)
+        content += u'<a class="wplightbox" data-group="wpgallery" data-thumbnail="{}" href="{}" title="image"><img class="scale-with-grid alignnone" src="{}"/></a>'.format(image_src, image_src, image_src)
     elif media['type'] == 'GraphVideo':
         image_src = u'{}/{}/{}'.format(media['save_domain'], user['id'], media['save_name'])
-        content += u'<a href="{}" data-rel="lightbox[folio]"><video class="scale-with-grid alignnone" playsinline="" poster="{}" src="{}" preload="none" type="video/mp4"/></a>'.format(image_src, image_src, media['video_url'])
+        content += u'<a class="wplightbox" data-group="wpgallery" data-thumbnail="{}" href="{}" title="video"><video class="owl-video" controls loop preload="none" poster="{}" src="{}" type="video/mp4"/></a>'.format(image_src, media['video_url'], image_src, media['video_url'])
     elif media['type'] == 'GraphSidecar':
         for node in media['sidecar_edges']:
             if node['node']['__typename'] == 'GraphImage':
                 image_src = u'{}/{}/{}'.format(node['node']['save_domain'], user['id'], node['node']['save_name'])
-                content += u'<a href="{}" data-rel="lightbox[folio]"><img class="scale-with-grid alignnone" src="{}" alt=""/></a>'.format(image_src, image_src)
+                content += u'<a class="wplightbox" data-group="wpgallery" data-thumbnail="{}" href="{}" title="image"><img class="scale-with-grid alignnone" src="{}"/></a>'.format(image_src, image_src, image_src)
             elif node['node']['__typename'] == 'GraphVideo':
                 image_src = u'{}/{}/{}'.format(node['node']['save_domain'], user['id'], node['node']['save_name'])
-                content += u'<a href="{}" data-rel="lightbox[folio]"><video class="scale-with-grid alignnone" playsinline="" poster="{}" src="{}" preload="none" type="video/mp4"/></a>'.format(image_src, image_src, node['node']['video_url'])
+                content += u'<a class="wplightbox" data-group="wpgallery" data-thumbnail="{}" href="{}" title="video"><video class="owl-video" controls loop preload="none" poster="{}" src="{}" type="video/mp4"/></a>'.format(image_src, node['node']['video_url'], image_src, node['node']['video_url'])
             else:
                 print "%s:type error (%s)." % (datetime.datetime.today(), node['node']['__typename'])
     else:
@@ -170,7 +170,7 @@ class InstagramSpider(Spider):
             url = 'https://www.instagram.com/graphql/query/?query_id=' + str(item_user['query_id']) + '&variables={"id":"' + item_user['id'] +'","first":12,"after":"'+ page['end_cursor'] +'"}'
             ##
             if RESUME_BROKEN:
-                url = 'https://www.instagram.com/graphql/query/?query_id=' + str(item_user['query_id']) + '&variables={"id":"' + item_user['id'] +'","first":12,"after":"AQCXB7EBzOA7ojIomTrr0Cofs3OuzmlbpzTGDDOQg7V5e-JrG41x1xGKlLv7nsYQhn715FDqGPx79ldOu0oASxkSAPmvz-Ib19Jv2LhldNGsoA"}'
+                url = 'https://www.instagram.com/graphql/query/?query_id=' + str(item_user['query_id']) + '&variables={"id":"' + item_user['id'] +'","first":12,"after":"AQBhxMeCXt_GuLmXiJLJ6gjvjVNgYz4KiMDD8Fjm0mFjKTX2o4T9EvNS_PCbVx76Y5JpQcS3ectSBNn6r4nascY97bJn5Cuj-eM50BGK1Eqeow"}'
                 REDIS.hdel('instagram_urls', urllib.quote(url, ":/?=&,"))
             
             print "%s:request (%s)." % (datetime.datetime.today(), url)
@@ -181,6 +181,10 @@ class InstagramSpider(Spider):
     def parse2(self, response):
         """加载更多文章的处理：数据格式和parse稍有不同，区别对待
         """
+        if REDIS.hexists('config', 'stop'):
+            print "%s:parse2 stoped by redis stop signale." % (datetime.datetime.today())
+            return
+        
         print "%s:parse2 (%s)." % (datetime.datetime.today(), response.url)
         
         item_user = response.meta['item']
