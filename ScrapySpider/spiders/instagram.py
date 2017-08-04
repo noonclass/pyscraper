@@ -81,16 +81,20 @@ class InstagramSpider(Spider):
         logger.info('-- Generation Time: %s' % (datetime.datetime.today()))
         
         urls = [
+            #@Japan
             #'https://www.instagram.com/cocoannne/',
             #'https://www.instagram.com/maggymoon/',             #hot
             #'https://www.instagram.com/rolaofficial/',
             #'https://www.instagram.com/nyanchan22/',            #warm
             #'https://www.instagram.com/moeka_nozaki/',
             #'https://www.instagram.com/saekoofficial/',
-            #
+            #@Australia
             'https://www.instagram.com/tuulavintage/',
-            #
+            #@Korea
             #'https://www.instagram.com/chuustagram/',
+            #'https://www.instagram.com/kimjeongyeon__/',
+            #'https://www.instagram.com/seul__p/',
+            #'https://www.instagram.com/sora_pppp/',
         ]
         for url in urls:
             print "%s:request (%s)." % (datetime.datetime.today(), url)
