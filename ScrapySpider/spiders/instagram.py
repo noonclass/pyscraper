@@ -7,10 +7,19 @@ from scrapy import Spider, Request
 from ScrapySpider.utils import *
 from ScrapySpider.items import *
 
-## 断点续传开关
-RESUME_BROKEN = False
+## 断点续传开关-爬取一个新用户的过程中网络中断导致需要继续爬取
+RESUME_BROKEN = True
+
+## 增量爬取开关-爬取一个旧用户自上次爬取后的更新数据
+INCREMENT_SWITCH = False
 
 def get_mysql4user(user):
+    if RESUME_BROKEN:#续传爬行，不添加用户信息
+        return
+    if INCREMENT_SWITCH:#增量爬取，不写用户表，只更新用户扩展表
+        sql = u"UPDATE `wp_usermeta` SET `meta_value` = '{}' WHERE `wp_usermeta`.`user_id` = {};".format(user['media_count'], user['id'])
+        logger.info(sql)
+        return
     sql = u"INSERT INTO `wp_users` (`ID`, `user_login`, `user_pass`, `user_nicename`, `user_email`, `user_registered`, `user_activation_key`, `user_status`, `display_name`) VALUES ({}, '{}', '$P$Bv4tMmzqpt9nBWKAdo7FUMUajheklN0', '{}', '{}@hotlinks.org', '1999-09-09 09:09:09', '', 0, '{}');".format(user['id'], user['username'], user['username'], user['username'],  user['full_name'])
     logger.info(sql)
     sql = u"INSERT INTO `wp_usermeta` (`user_id`, `meta_key`, `meta_value`) VALUES ({}, 'nickname', '{}');".format(user['id'], user['username'])
@@ -69,17 +78,19 @@ class InstagramSpider(Spider):
     name = 'instagram'
 
     def start_requests(self):
-        #追写评论，对上次爬取过的最新12篇文章再次获取评论信息
-        self.rescrapys = 12
         logger.info('-- Generation Time: %s' % (datetime.datetime.today()))
         
         urls = [
-            'https://www.instagram.com/cocoannne/',
+            #'https://www.instagram.com/cocoannne/',
             #'https://www.instagram.com/maggymoon/',             #hot
             #'https://www.instagram.com/rolaofficial/',
             #'https://www.instagram.com/nyanchan22/',            #warm
             #'https://www.instagram.com/moeka_nozaki/',
             #'https://www.instagram.com/saekoofficial/',
+            #
+            'https://www.instagram.com/tuulavintage/',
+            #
+            #'https://www.instagram.com/chuustagram/',
         ]
         for url in urls:
             print "%s:request (%s)." % (datetime.datetime.today(), url)
@@ -89,13 +100,14 @@ class InstagramSpider(Spider):
         """首页处理：获取用户信息和当前显示的文章信息
         """
         print "%s:parse (%s)." % (datetime.datetime.today(), response.url)
-         
+        
         item_user = InstagramUserItem() #用户信息
         
         #获取动态配置，用来构造自动加载更多内容的请求时，查询ID是必带参数
         url = 'https://www.instagram.com' + ''.join(response.xpath('//script[contains(@src, "Commons.js")]/@src').extract())
         print "%s:request (%s)." % (datetime.datetime.today(), url)
         javascript = get_response(url)
+        print "%s:request (%s) done." % (datetime.datetime.today(), url)
         javascript = javascript.text
         pattern = re.compile(r'PROFILE_POSTS_UPDATED(.*?)queryId:"(\d+)"', re.S)
         item_user['query_id'] = re.search(pattern, javascript).group(2) #文章查询ID
@@ -125,7 +137,24 @@ class InstagramSpider(Spider):
         self.log('parse user %s' % item_user["full_name"])
         get_mysql4user(item_user) #写数据库
         
+        #更新最新媒体ID
+        item_user['latest_id'] = '0'
+        item_user['latest_ct'] = 0
+        if REDIS.hexists('instagram_latest', item_user['username']):
+            item_user['latest_id'] = REDIS.hget('instagram_latest', item_user['username'])
+        
+        #前11个不作为更新的内容，等待其点赞和评论基本停顿后更新
+        latest = get_extracted(data['user']['media']['nodes'], -1)
+        REDIS.hset('instagram_latest', item_user['username'], latest['id'])
+        
         for node in data['user']['media']['nodes']:
+            if RESUME_BROKEN:
+                continue
+            #最新的11个不写SQL
+            item_user['latest_ct'] += 1
+            if item_user['latest_ct'] < 12:
+                continue
+            
             item_media = InstagramMediaItem() #文章信息
             item_media['type'] = node['__typename']
             item_media['id'] = node['id']
@@ -150,13 +179,13 @@ class InstagramSpider(Spider):
             self.parse_single(item_media, item_user)
             
             self.log('parse media %s' % item_media['display_url'])
+            if item_user['latest_id'] == item_media['id']:
+                print "%s:parse stoped by hexists latest." % (datetime.datetime.today())
+                return
+            
             if REDIS.hexists('instagram_medias', item_media['id']):
-                self.rescrapys -= 1 #已缓存，倒数12个退出爬取
-                if (self.rescrapys <= 0):
-                    if RESUME_BROKEN:
-                        pass
-                    else:
-                        return
+                print "%s:parse stoped by hexists medias." % (datetime.datetime.today())
+                return
             else:
                 REDIS.hset('instagram_medias', item_media['id'], item_media['date']) #缓存
                 get_mysql4media(item_media, item_user) #写数据库
@@ -170,7 +199,7 @@ class InstagramSpider(Spider):
             url = 'https://www.instagram.com/graphql/query/?query_id=' + str(item_user['query_id']) + '&variables={"id":"' + item_user['id'] +'","first":12,"after":"'+ page['end_cursor'] +'"}'
             ##
             if RESUME_BROKEN:
-                url = 'https://www.instagram.com/graphql/query/?query_id=' + str(item_user['query_id']) + '&variables={"id":"' + item_user['id'] +'","first":12,"after":"AQBhxMeCXt_GuLmXiJLJ6gjvjVNgYz4KiMDD8Fjm0mFjKTX2o4T9EvNS_PCbVx76Y5JpQcS3ectSBNn6r4nascY97bJn5Cuj-eM50BGK1Eqeow"}'
+                url = 'https://www.instagram.com/graphql/query/?query_id=' + str(item_user['query_id']) + '&variables={"id":"' + item_user['id'] +'","first":12,"after":"AQA3O-kSthe4Zq7QEI-6PDkPM5PkyCkTw6X0XiT9xrSsXdig18ewWT_PpyKJxBVh783EmWKwJdD7dNKiiye6TsYUyzag-J-KA_USerqYcnVt2g"}'
                 REDIS.hdel('instagram_urls', urllib.quote(url, ":/?=&,"))
             
             print "%s:request (%s)." % (datetime.datetime.today(), url)
@@ -240,13 +269,13 @@ class InstagramSpider(Spider):
             self.parse_single(item_media, item_user)
             
             self.log('parse media %s' % item_media['display_url'])
+            if item_user['latest_id'] == item_media['id']:
+                print "%s:parse stoped by hexists latest." % (datetime.datetime.today())
+                return
+            
             if REDIS.hexists('instagram_medias', item_media['id']):
-                self.rescrapys -= 1
-                if (self.rescrapys <= 0):
-                    if RESUME_BROKEN:
-                        pass
-                    else:
-                        return
+                print "%s:parse2 stoped by hexists medias." % (datetime.datetime.today())
+                return
             else:
                 REDIS.hset('instagram_medias', item_media['id'], item_media['date']) #缓存
                 get_mysql4media(item_media, item_user) #写数据库

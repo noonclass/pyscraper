@@ -112,10 +112,10 @@ from sys import platform as _platform
 
 BASE = r'D:/Media/'
 if _platform == "linux" or _platform == "linux2":
-    BASE = r' /root/Pictures/'#root
+    BASE = r'/root/Pictures/'#root
     BASE = r'/home/<username>/Downloads/'
 elif _platform == "darwin":
-    BASE = r' /Users/<username>/Downloads/'
+    BASE = r'/Users/<username>/Downloads/'
 elif _platform == "win32":
     pass
 elif _platform == "win64":

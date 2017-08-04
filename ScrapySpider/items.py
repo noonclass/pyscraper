@@ -21,7 +21,9 @@ class InstagramUserItem(scrapy.Item):
     #动态获取
     query_id            = scrapy.Field() #查询更多文章使用
     query_id2           = scrapy.Field() #查询更多评论使用<暂存传递给POST的query_id>
-
+    latest_id           = scrapy.Field() #上次爬取最新媒体ID
+    latest_ct           = scrapy.Field() #最新计数，前11个不写SQL
+    
 class InstagramMediaItem(scrapy.Item):
     #图片信息
     type                = scrapy.Field() #__typename<GraphImage/GraphSidecar/GraphVideo>
