@@ -41,8 +41,8 @@ LOGGING = {
             # The values below are passed to the handler creator callable
             # as keyword arguments.
             'filename': 'spider.sql',
-            'when': 'midnight',
-            'interval': 1,
+            'when': 'D',
+            'interval': 7,
             'backupCount': 365,
             'encoding': 'utf-8'
         }

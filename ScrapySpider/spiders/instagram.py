@@ -8,7 +8,7 @@ from ScrapySpider.utils import *
 from ScrapySpider.items import *
 
 ## 断点续传开关-爬取一个新用户的过程中网络中断导致需要继续爬取
-RESUME_BROKEN = True
+RESUME_BROKEN = False
 
 ## 增量爬取开关-爬取一个旧用户自上次爬取后的更新数据
 INCREMENT_SWITCH = False
@@ -89,12 +89,12 @@ class InstagramSpider(Spider):
             #'https://www.instagram.com/moeka_nozaki/',
             #'https://www.instagram.com/saekoofficial/',
             #@Australia
-            'https://www.instagram.com/tuulavintage/',
+            #'https://www.instagram.com/tuulavintage/',
             #@Korea
             #'https://www.instagram.com/chuustagram/',
             #'https://www.instagram.com/kimjeongyeon__/',
             #'https://www.instagram.com/seul__p/',
-            #'https://www.instagram.com/sora_pppp/',
+            'https://www.instagram.com/sora_pppp/',
         ]
         for url in urls:
             print "%s:request (%s)." % (datetime.datetime.today(), url)
@@ -107,17 +107,22 @@ class InstagramSpider(Spider):
         
         item_user = InstagramUserItem() #用户信息
         
-        #获取动态配置，用来构造自动加载更多内容的请求时，查询ID是必带参数
-        url = 'https://www.instagram.com' + ''.join(response.xpath('//script[contains(@src, "Commons.js")]/@src').extract())
-        print "%s:request (%s)." % (datetime.datetime.today(), url)
-        javascript = get_response(url)
-        print "%s:request (%s) done." % (datetime.datetime.today(), url)
-        javascript = javascript.text
-        pattern = re.compile(r'PROFILE_POSTS_UPDATED(.*?)queryId:"(\d+)"', re.S)
-        item_user['query_id'] = re.search(pattern, javascript).group(2) #文章查询ID
-         
-        pattern = re.compile(r'COMMENT_REQUEST_UPDATED(.*?)queryId:"(\d+)"', re.S)
-        item_user['query_id2'] = re.search(pattern, javascript).group(2) #评论查询ID
+        try:
+            #获取动态配置，用来构造自动加载更多内容的请求时，查询ID是必带参数
+            url = 'https://www.instagram.com' + ''.join(response.xpath('//script[contains(@src, "Commons.js")]/@src').extract())
+            print "%s:request (%s)." % (datetime.datetime.today(), url)
+            javascript = get_response(url)
+            javascript = javascript.text
+            #{pageSize:u,pagesToPreload:0,getState:function(e,t){return e.profilePosts.byUserId.get(t).pagination},queryId:"17888483320059182",queryParams:...
+            pattern = re.compile(r'e\.profilePosts\.byUserId\.get(.*?)\.pagination\},queryId:"(\d+)"', re.S)
+            item_user['query_id'] = re.search(pattern, javascript).group(2) #文章查询ID
+            #{pageSize:l,pagesToPreload:1,getState:function(e,t){return e.comments.byPostId.get(t).pagination},queryId:"17852405266163336",queryParams:...
+            pattern = re.compile(r'e\.comments\.byPostId\.get(.*?)\.pagination\},queryId:"(\d+)"', re.S)
+            item_user['query_id2'] = re.search(pattern, javascript).group(2) #评论查询ID
+            print "%s:queryId:(%s, %s)." % (datetime.datetime.today(), item_user['query_id'], item_user['query_id2'])
+        except Exception as e:
+            print "%s:%s" % (datetime.datetime.today(), e)
+            return
         
         #获取内容，当前页面的图片获取主逻辑
         javascript = ''.join(response.xpath('//script[contains(text(), "sharedData")]/text()').extract())
