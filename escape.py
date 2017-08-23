@@ -41,7 +41,7 @@ if __name__ == '__main__':
             SPLIT += 1
         
         ## ID临时改为32位系统
-        #line = re.sub(r"1[45678](\d{7,8})(\d{9})", r"\2", line)
+        #line = re.sub(r"([^_\d])1[45678](\d{6,8})(\d{9})", r"\1\3", line)
         dst.write(line)
     
     src.close()
