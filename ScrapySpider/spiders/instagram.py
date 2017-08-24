@@ -64,7 +64,10 @@ def get_mysql4media(media, user):
     media2['comment_page_info'] = scrapy.Field()
     media2['comment_edges'] = scrapy.Field()
     #NOTE:: location的name需转码单引号, sidecar_edges不含caption无需处理
-    media2['location']['name'] = media2['location']['name'].replace(r"'", r"\'")#"name": "Val d' Orcia"
+    try:
+        media2['location']['name'] = media2['location']['name'].replace(r"'", r"\'")#"name": "Val d' Orcia"
+    except Exception:
+        pass
     sql = ur"""INSERT INTO `wp_posts` (`ID`, `post_author`, `post_date`, `post_date_gmt`, `post_content`, `post_title`, `post_excerpt`, `post_status`, `comment_status`, `ping_status`, `post_password`, `post_name`, `to_ping`, `pinged`, `post_modified`, `post_modified_gmt`, `post_content_filtered`, `post_parent`, `guid`, `menu_order`, `post_type`, `post_mime_type`, `comment_count`) VALUES ({}, {}, '{}', '{}', '{}', '{}', '{}', 'publish', 'open', 'open', '', '{}', '', '', '{}', '{}', '', 0, 'http://hotlinks.org/?p={}', 0, '{}', '', {});""".format(media['id'], user['id'], dt, dt, content, media['caption'], json.dumps(dict(media2.items())).replace("\\'", "\'"), media['shortcode'], dt, dt, media['id'], 'post', media['comment_count'])
     logger.info(sql)
     
