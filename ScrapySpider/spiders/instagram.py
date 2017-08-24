@@ -63,6 +63,8 @@ def get_mysql4media(media, user):
     media2 = InstagramMediaItem(media)
     media2['comment_page_info'] = scrapy.Field()
     media2['comment_edges'] = scrapy.Field()
+    #NOTE:: location的name需转码单引号, sidecar_edges不含caption无需处理
+    media2['location']['name'] = media2['location']['name'].replace(r"'", r"\'")#"name": "Val d' Orcia"
     sql = ur"""INSERT INTO `wp_posts` (`ID`, `post_author`, `post_date`, `post_date_gmt`, `post_content`, `post_title`, `post_excerpt`, `post_status`, `comment_status`, `ping_status`, `post_password`, `post_name`, `to_ping`, `pinged`, `post_modified`, `post_modified_gmt`, `post_content_filtered`, `post_parent`, `guid`, `menu_order`, `post_type`, `post_mime_type`, `comment_count`) VALUES ({}, {}, '{}', '{}', '{}', '{}', '{}', 'publish', 'open', 'open', '', '{}', '', '', '{}', '{}', '', 0, 'http://hotlinks.org/?p={}', 0, '{}', '', {});""".format(media['id'], user['id'], dt, dt, content, media['caption'], json.dumps(dict(media2.items())).replace("\\'", "\'"), media['shortcode'], dt, dt, media['id'], 'post', media['comment_count'])
     logger.info(sql)
     
@@ -94,7 +96,11 @@ class InstagramSpider(Spider):
             #'https://www.instagram.com/chuustagram/',
             #'https://www.instagram.com/kimjeongyeon__/',
             #'https://www.instagram.com/seul__p/',
-            'https://www.instagram.com/sora_pppp/',
+            #'https://www.instagram.com/sora_pppp/',
+            #photographer
+            #'https://www.instagram.com/brahmino',#travel
+            #'https://www.instagram.com/iwwm',#scenery, sight
+            'https://www.instagram.com/benjaminheath',#scenery, sight
         ]
         for url in urls:
             print "%s:request (%s)." % (datetime.datetime.today(), url)
@@ -155,6 +161,7 @@ class InstagramSpider(Spider):
         #前11个不作为更新的内容，等待其点赞和评论基本停顿后更新
         latest = get_extracted(data['user']['media']['nodes'], -1)
         REDIS.hset('instagram_latest', item_user['username'], latest['id'])
+        logger.info('-- User (%s) Latest ID (%s)' % (item_user['username'], latest['id']))
         
         for node in data['user']['media']['nodes']:
             if RESUME_BROKEN:
